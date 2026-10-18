@@ -1,0 +1,11 @@
+[package]
+name = "bbmod-dualsense"
+version = "0.1.0"
+edition = "2021"
+[lib]
+crate-type = ["cdylib", "rlib"]
+[dependencies]
+bbmod = { git = "https://github.com/DigitalEthosGlobalGaming/bb-modding.git", rev = "df41635446063d987521166859e3bdd6ca2d5175" }
+[profile.release]
+panic = "unwind"
+lto = true

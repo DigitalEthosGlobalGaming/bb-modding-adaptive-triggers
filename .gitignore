@@ -1,0 +1,7 @@
+/target/
+/out/
+/dist/
+*.exe
+*.zip
+*.dll
+*.pdb

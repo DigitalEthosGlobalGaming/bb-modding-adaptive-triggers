@@ -1,0 +1,40 @@
+name: Build mod
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable-x86_64-pc-windows-msvc
+      - uses: msys2/setup-msys2@v2
+        id: msys2
+        with:
+          msystem: CLANG64
+          update: true
+          install: >-
+            mingw-w64-clang-x86_64-clang
+            mingw-w64-clang-x86_64-cmake
+            mingw-w64-clang-x86_64-ninja
+      - name: Build and test without deploying
+        shell: pwsh
+        env:
+          CLANG_BIN: ${{ steps.msys2.outputs.msys2-location }}/clang64/bin
+        run: ./build.ps1 -Test -NoDeploy -ClangBin $env:CLANG_BIN
+      - name: Package mod
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/bbmod.dualsense -DestinationPath dist/bbmod.dualsense-windows-x64.zip
+          $hash = (Get-FileHash dist/bbmod.dualsense-windows-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  bbmod.dualsense-windows-x64.zip" | Set-Content -Encoding ascii dist/bbmod.dualsense-windows-x64.zip.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: adaptive-triggers-windows-x64
+          path: |
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
