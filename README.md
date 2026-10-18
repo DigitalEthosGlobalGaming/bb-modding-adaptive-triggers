@@ -4,9 +4,12 @@ DualSense adaptive trigger feedback and configurable lightbar for Bloodborne
 running on a bbport build with [bbmod](https://github.com/DigitalEthosGlobalGaming/bb-modding)
 integrated. Mod ID: `bbmod.dualsense`.
 
-Phase 1 uses physical L2/R2 input: R2 resistance/charge/give and an L2 pulse/buzz.
-It does not confirm attacks or shots from game state. HP lightbar mode and
-gameplay-driven weapon, stamina, ammo and menu detection remain future work.
+Uses physical L2/R2 input with optional shared equipment/inventory observations
+to select weapon presets and suppress firearm feedback when resolved ammunition
+is empty. It does not confirm successful attacks or shots. USB grip haptics add
+authored stereo actuator clips and manual texture previews through the optional
+host extension; Bluetooth grip audio and automatic floor/footstep detection are
+not implemented. HP lightbar mode and native game-menu detection remain future work.
 
 **Download and use this mod at your own risk. The bb-modding mod list does not
 vet, audit or verify listed mods, and inclusion is not an endorsement.**
@@ -75,3 +78,10 @@ The design record is [specification.md](specification.md); its opening draft
 status predates the implementation. [Local history](docs/LOCAL-HISTORY.md)
 preserves earlier workspace notes and reported checks, including paths that do
 not apply to a standalone clone. Current source and CI logs define this snapshot.
+
+The `develop` snapshot uses a pinned framework commit containing the shared
+equipment/inventory services and optional USB haptics API. Unsupported services
+fall back to input-only presets; unstable gameplay samples temporarily neutralize
+effects. The mod retains standalone build/package behavior and never deploys
+unless `-ModsDir` is supplied. See [local implementation notes](docs/LOCAL-HISTORY.md)
+for configuration, equipment profiles, endpoint matching and validation limits.

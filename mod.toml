@@ -25,3 +25,10 @@ release = "give"
 [l2]
 press = "resistance 10 90"
 shot = "resistance_vibration 15 63 128 for 100ms"
+
+[gameplay]
+enabled = "true"
+
+[haptics]
+enabled = "true"
+intensity = "0.45"

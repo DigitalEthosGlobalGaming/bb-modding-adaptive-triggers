@@ -5,7 +5,7 @@ version = 4
 [[package]]
 name = "bbmod"
 version = "0.1.0"
-source = "git+https://github.com/DigitalEthosGlobalGaming/bb-modding.git?rev=df41635446063d987521166859e3bdd6ca2d5175#df41635446063d987521166859e3bdd6ca2d5175"
+source = "git+https://github.com/DigitalEthosGlobalGaming/bb-modding.git?rev=9742a54721f16520d78d63a687875fbc3a69e745#9742a54721f16520d78d63a687875fbc3a69e745"
 dependencies = [
  "bbmod-sys",
 ]
@@ -20,4 +20,4 @@ dependencies = [
 [[package]]
 name = "bbmod-sys"
 version = "0.1.0"
-source = "git+https://github.com/DigitalEthosGlobalGaming/bb-modding.git?rev=df41635446063d987521166859e3bdd6ca2d5175#df41635446063d987521166859e3bdd6ca2d5175"
+source = "git+https://github.com/DigitalEthosGlobalGaming/bb-modding.git?rev=9742a54721f16520d78d63a687875fbc3a69e745#9742a54721f16520d78d63a687875fbc3a69e745"

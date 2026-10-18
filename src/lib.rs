@@ -1,3 +1,5 @@
+mod game;
+mod haptics;
 mod logic;
 use bbmod::dualsense::{self as ds, Effect, Trigger};
 use bbmod::{Cx, Mod, Result, Ui};
@@ -15,12 +17,33 @@ struct State {
     raw_side: usize,
     preview: Option<(usize, Effect, Option<u64>)>,
     device: u64,
+    reset_pending: bool,
+    loadout: Option<game::Loadout>,
+    game_status: String,
+    game_next_ms: u64,
+    game_neutral: bool,
+    grip_input: haptics::Input,
+    grip_active: bool,
+    grip_firearm: bool,
+    grip_preview_until: u64,
+    grip_blocked: bool,
+    grip_status: String,
+    grip_preview: Option<haptics::Feel>,
+    grip_texture: usize,
+    grip_retry: u64,
 }
 struct Adaptive {
     state: Arc<Mutex<State>>,
 }
 fn config(cx: &Cx) -> Settings {
     let mut s = Settings::default();
+    s.haptics = cx.config_bool("haptics.enabled", true);
+    s.haptics_gain = cx
+        .config_parse::<f32>("haptics.intensity")
+        .filter(|x| x.is_finite())
+        .unwrap_or(0.45)
+        .clamp(0.0, 1.0);
+    s.gameplay = cx.config_bool("gameplay.enabled", true);
     s.enabled = cx.config_bool("general.enabled", true);
     s.firearm = cx.config_bool("map.firearm_feel_on_l2", true);
     s.intensity = cx
@@ -89,7 +112,17 @@ fn config(cx: &Cx) -> Settings {
     }
     s
 }
+fn stop_grip(cx: &Cx, s: &mut State) {
+    if s.grip_active {
+        let _ = cx.pad_haptics(&[]);
+    }
+    s.grip_active = false;
+    s.grip_preview_until = 0;
+    s.grip_blocked = true;
+}
 fn reset(cx: &Cx, s: &mut State) {
+    stop_grip(cx, s);
+    s.grip_preview = None;
     s.preview = None;
     s.logic.reset();
     for side in [Trigger::Left, Trigger::Right] {
@@ -97,7 +130,62 @@ fn reset(cx: &Cx, s: &mut State) {
     }
     s.last = [ds::off(); 2];
 }
+fn poll_game(cx: &Cx, s: &mut State, now: u64) {
+    if !s.settings.gameplay {
+        s.loadout = None;
+        s.game_neutral = false;
+        s.game_status = "Equipment effects disabled; using input presets".into();
+        return;
+    }
+    if now < s.game_next_ms {
+        return;
+    }
+    s.game_next_ms = now + 250;
+    let result = game::read(cx);
+    match result {
+        Ok(loadout) => {
+            let identity = |l: &game::Loadout| (l.generation, l.right, l.left);
+            if s.loadout.as_ref().map(identity) != Some(identity(&loadout)) {
+                s.logic.reset();
+                stop_grip(cx, s);
+                s.preview = None;
+            }
+            if s.loadout.as_ref() != Some(&loadout) {
+                cx.log_info(&format!("Equipment feedback sample: {}", loadout.summary()));
+            }
+            s.game_status = loadout.summary();
+            s.loadout = Some(loadout);
+            s.game_neutral = false;
+            if let Ok(player) = cx.player_snapshot() {
+                if player.flags & bbmod::gameplay::AVAILABLE == 0
+                    || player.health <= 0
+                    || s.loadout
+                        .as_ref()
+                        .is_some_and(|l| l.generation != player.generation)
+                {
+                    s.loadout = None;
+                    s.game_neutral = true;
+                    s.game_status = "Player unavailable/dead: effects off".into();
+                }
+            }
+        }
+        Err(error) => {
+            s.loadout = None;
+            s.logic.reset();
+            s.game_neutral = error != bbmod::Error::UNSUPPORTED;
+            s.game_status = if s.game_neutral {
+                format!("Equipment unavailable ({error}); effects off until a fresh sample")
+            } else {
+                "Equipment service/profile unsupported; using input presets".into()
+            };
+        }
+    }
+}
 fn frame(cx: &Cx, s: &mut State) {
+    if std::mem::take(&mut s.reset_pending) {
+        reset(cx, s);
+        let _ = cx.pad_lightbar([0; 3]);
+    }
     if cx.key_down(bbmod::key::ESCAPE) {
         s.settings.enabled = false;
         reset(cx, s);
@@ -119,6 +207,8 @@ fn frame(cx: &Cx, s: &mut State) {
         return;
     }
     if s.device != p.device_id {
+        stop_grip(cx, s);
+        s.grip_retry = 0;
         s.device = p.device_id;
         s.logic.reset();
         s.preview = None;
@@ -146,9 +236,13 @@ fn frame(cx: &Cx, s: &mut State) {
         let _ = cx.pad_lightbar([0; 3]);
         return;
     }
-    let mut effects = if captured {
+    poll_game(cx, s, now);
+    let mut effects = if captured || s.game_neutral {
         s.logic.reset();
         [ds::off(); 2]
+    } else if let Some(loadout) = &s.loadout {
+        s.logic
+            .game_effects(&s.settings, [p.l2_depth, p.r2_depth], now, loadout)
     } else {
         s.logic.effects(&s.settings, [p.l2_depth, p.r2_depth], now)
     };
@@ -167,6 +261,7 @@ fn frame(cx: &Cx, s: &mut State) {
             }
         }
     }
+    grip_frame(cx, s, &p, captured, now);
     let mut error = String::new();
     for (i, side) in [Trigger::Left, Trigger::Right].into_iter().enumerate() {
         let result = if s.settings.mapping[i] == 0 && s.preview.is_none() {
@@ -193,19 +288,140 @@ fn frame(cx: &Cx, s: &mut State) {
     s.error = error;
     s.last = effects;
 }
+fn grip_frame(cx: &Cx, s: &mut State, p: &ds::PadInfo, captured: bool, now: u64) {
+    let depths = [p.l2_depth, p.r2_depth];
+    if !s.settings.haptics || s.settings.haptics_gain <= 0.0 || p.connection != 1 {
+        stop_grip(cx, s);
+        s.grip_input.sync(depths);
+        s.grip_preview = None;
+        s.grip_status = if p.connection != 1 {
+            "Grip haptics require USB"
+        } else {
+            "Grip haptics disabled"
+        }
+        .into();
+        return;
+    }
+    if captured {
+        // Keep an armed preview, but never play while UI captures input.
+        stop_grip(cx, s);
+        s.grip_input.sync(depths);
+        return;
+    }
+    let preview = s.grip_preview.take();
+    if s.game_neutral && preview.is_none() && now >= s.grip_preview_until {
+        stop_grip(cx, s);
+        s.grip_input.sync(depths);
+        return;
+    }
+    if s.grip_blocked {
+        s.grip_input.sync(depths);
+        s.grip_blocked = false;
+    }
+    let cue = preview.map(|f| (f, true)).or_else(|| {
+        s.grip_input.cue(
+            &s.settings,
+            depths,
+            cx.pad_pressed(bbmod::pad::R1),
+            now,
+            s.loadout.as_ref(),
+        )
+    });
+    // Clear a firearm tail as soon as an empty inventory sample arrives.
+    if s.grip_active
+        && s.grip_firearm
+        && preview.is_none()
+        && s.loadout.as_ref().is_some_and(|l| l.ammo == Some(0))
+        && s.settings
+            .mapping
+            .iter()
+            .enumerate()
+            .any(|(i, m)| *m == 2 && depths[i] >= 40)
+    {
+        stop_grip(cx, s);
+    }
+    if let Some((feel, left)) = cue {
+        if now < s.grip_retry {
+            return;
+        }
+        let pcm = haptics::waveform(feel, s.settings.haptics_gain, left);
+        match cx.pad_haptics(&pcm) {
+            Ok(()) => {
+                s.grip_active = true;
+                s.grip_firearm = preview.is_none() && left;
+                if preview.is_some() {
+                    s.grip_preview_until = now + pcm.len() as u64 / 48 + 30;
+                }
+                s.grip_status = "USB grip haptics active (input-driven weapon cues)".into();
+            }
+            Err(e) => {
+                stop_grip(cx, s);
+                s.grip_retry = now + 3000;
+                s.grip_status=format!("Grip haptics unavailable ({e}): requires updated host and one USB DualSense quad audio endpoint");
+            }
+        }
+    }
+}
 fn byte(ui: &Ui, label: &str, v: &mut u8) {
     let mut n = *v as i32;
     ui.slider_i32(label, &mut n, 0, 255);
     *v = n as u8;
 }
+fn dashboard(ui: &Ui, s: &State) {
+    ui.text("Adaptive Triggers");
+    ui.text(&s.status);
+    ui.text(&s.game_status);
+    ui.text(&s.grip_status);
+    if !s.error.is_empty() {
+        ui.text(&s.error);
+    }
+    ui.text(if s.settings.enabled {
+        "Effects enabled"
+    } else {
+        "Effects disabled"
+    });
+    if s.preview.is_some() {
+        ui.text("Controller test armed or running; reopen F1 to cancel.");
+    }
+    ui.text("Configure controller effects in bbmod.settings > Adaptive Triggers.");
+    ui.separator();
+}
 fn panel(ui: &Ui, s: &mut State) {
     ui.text(&s.status);
+    ui.text(&s.game_status);
+    ui.text(&s.grip_status);
     if !s.error.is_empty() {
         ui.text(&s.error);
     }
     ui.checkbox("Enabled", &mut s.settings.enabled);
+    if ui.checkbox("Equipment and empty-ammo effects", &mut s.settings.gameplay) {
+        s.game_next_ms = 0;
+        s.logic.reset();
+    }
+    ui.text("Equipment overrides preset forces. Unknown hand selection stays unresolved.");
     ui.slider_f32("Intensity", &mut s.settings.intensity, 0.0, 1.5);
     ui.checkbox("Firearm feel", &mut s.settings.firearm);
+    ui.checkbox("USB grip haptics", &mut s.settings.haptics);
+    ui.slider_f32("Grip intensity", &mut s.settings.haptics_gain, 0.0, 1.0);
+    if ui.collapsing_header("Grip texture tests") {
+        ui.combo(
+            "Texture",
+            &mut s.grip_texture,
+            &[
+                "Stone: sharp tap",
+                "Wood: hollow knock",
+                "Grass: soft rustle",
+                "Water: loose splash",
+            ],
+        );
+        if ui.button("Test grip texture after closing F1") {
+            s.grip_preview = Some(haptics::TEXTURES[s.grip_texture.min(3)]);
+            s.grip_retry = 0;
+        }
+        ui.text(
+            "Short authored previews. Automatic footsteps/surface detection is not available yet.",
+        );
+    }
     ui.checkbox("Fixed lightbar", &mut s.settings.lightbar);
     for (i, label) in ["Red", "Green", "Blue"].iter().enumerate() {
         byte(ui, label, &mut s.settings.colour[i]);
@@ -264,13 +480,14 @@ fn panel(ui: &Ui, s: &mut State) {
     }
     if ui.button("Reset triggers and disable") {
         s.settings.enabled = false;
-        reset(ui.cx(), s);
+        s.preview = None;
+        s.reset_pending = true;
     }
     ui.text(&format!(
         "Requested L2: {:02X?}\nRequested R2: {:02X?}",
         s.last[0].0, s.last[1].0
     ));
-    ui.text("Phase 2: HP, stamina, bullets, weapon and in-game menus not discovered.");
+    ui.text("Weapon and gear profiles use sampled inventory. Empty ammo removes firearm resistance and buzz. Native menus and transformed forms are not identified.");
     ui.text("Panel changes survive hot reload. Edit config/bbmod.dualsense.toml to persist across launches.");
 }
 impl Mod for Adaptive {
@@ -286,6 +503,20 @@ impl Mod for Adaptive {
             raw_side: 1,
             preview: None,
             device: 0,
+            reset_pending: false,
+            loadout: None,
+            game_status: "Waiting for equipment data".into(),
+            game_next_ms: 0,
+            game_neutral: false,
+            grip_input: haptics::Input::default(),
+            grip_active: false,
+            grip_firearm: false,
+            grip_preview_until: 0,
+            grip_blocked: true,
+            grip_status: "USB grip haptics ready to test; surface detection unavailable".into(),
+            grip_preview: None,
+            grip_texture: 0,
+            grip_retry: 0,
         }));
         let f = state.clone();
         cx.on_frame(move |cx| {
@@ -293,14 +524,34 @@ impl Mod for Adaptive {
                 frame(cx, &mut s);
             }
         })?;
-        let p = state.clone();
-        cx.panel("Adaptive Triggers", move |ui| {
-            if let Ok(mut s) = p.lock() {
-                panel(ui, &mut s);
+        let summary = state.clone();
+        match cx.contribute("bbmod.dashboard", "status", 200, move |ui| {
+            if let Ok(s) = summary.lock() {
+                dashboard(ui, &s);
             }
-        })?;
+        }) {
+            Ok(_) => {
+                let p = state.clone();
+                cx.contribute("bbmod.settings", "controls", 200, move |ui| {
+                    if ui.collapsing_header("Adaptive Triggers") {
+                        if let Ok(mut s) = p.lock() {
+                            panel(ui, &mut s);
+                        }
+                    }
+                })?;
+            }
+            Err(bbmod::Error::UNSUPPORTED) => {
+                let p = state.clone();
+                cx.panel("Adaptive Triggers", move |ui| {
+                    if let Ok(mut s) = p.lock() {
+                        panel(ui, &mut s);
+                    }
+                })?;
+            }
+            Err(error) => return Err(error),
+        }
         cx.log_info(
-            "Adaptive Triggers: input-only phase 1; use the panel to disable during in-game menus.",
+            "Adaptive Triggers: equipment profiles and empty-ammo feedback enabled; live inventory/slot semantics still require validation; configure in bbmod.settings.",
         );
         Ok(Self { state })
     }
@@ -312,6 +563,8 @@ impl Mod for Adaptive {
             s.settings = settings;
             s.logic.reset();
             s.preview = None;
+            s.grip_preview = None;
+            s.grip_blocked = true;
         }
     }
     fn unload(&mut self, cx: &mut Cx) {

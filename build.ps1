@@ -18,7 +18,9 @@ if ($Test) {
     $bb = [IO.Path]::GetFullPath((Join-Path (Split-Path $sdk.manifest_path -Parent) '../../..'))
     $out = Join-Path $root 'out'
     $hostBuild = "$out/host"
-    Run cmake @('-S', $bb, '-B', $hostBuild, '-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Release',
+    # A new pinned SDK resolves to a different Cargo checkout. Reset CMake's
+    # source cache so an earlier dependency revision cannot poison this build.
+    Run cmake @('--fresh', '-S', $bb, '-B', $hostBuild, '-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Release',
         '-DCMAKE_C_COMPILER=clang', '-DCMAKE_CXX_COMPILER=clang++',
         '-DBBMOD_BUILD_TESTS=OFF', '-DBBMOD_WITH_ZYDIS=OFF')
     Run cmake @('--build', $hostBuild, '--parallel', '4')
@@ -41,6 +43,9 @@ if ($Test) {
             $includes + @("$root/tests/runtime-pad.c", "$port/src/runtime_input_config.c",
             '-lSDL3', '-o', "$out/test-runtime-pad.exe"))
         Run "$out/test-runtime-pad.exe" @()
+        Run clang @('-std=c11', '-Wall', '-Wextra', '-Werror', "-I$port",
+            "$root/tests/runtime-haptics.c", '-lSDL3', '-o', "$out/test-runtime-haptics.exe")
+        Run "$out/test-runtime-haptics.exe" @()
     }
 }
 $package = Join-Path $root 'dist/bbmod.dualsense'

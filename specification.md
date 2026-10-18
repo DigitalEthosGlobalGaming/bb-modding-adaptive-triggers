@@ -1,5 +1,7 @@
 # DualSense Adaptive Triggers Mod: Plan and Specification
 
+**Implementation update (2026-10-18):** The original HD-haptics non-goal below is superseded by the user-requested USB grip-haptics extension. See README and `src/haptics.rs` for implemented scope, manual texture previews, and the remaining lack of floor/footstep signals.
+
 **Status:** draft 0.1, 2026-10-18. A plan: **no code exists for this yet.** It is written against
 the current bbmod host, the bbport integration patch, the Rust SDK in this repository, and what was
 confirmed by reading SDL3's source and bbport's pad code. Anything not confirmed is marked
