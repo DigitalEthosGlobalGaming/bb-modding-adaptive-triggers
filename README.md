@@ -85,3 +85,9 @@ fall back to input-only presets; unstable gameplay samples temporarily neutraliz
 effects. The mod retains standalone build/package behavior and never deploys
 unless `-ModsDir` is supplied. See [local implementation notes](docs/LOCAL-HISTORY.md)
 for configuration, equipment profiles, endpoint matching and validation limits.
+
+## Licence
+
+MIT. Use it however you like. It is provided as is, with no warranty and no liability. See [LICENSE](LICENSE).
+
+The `licenses/` folder keeps the notices of the bbmod SDK this mod is built with (MIT OR Apache-2.0).

@@ -50,7 +50,7 @@ if ($Test) {
 }
 $package = Join-Path $root 'dist/bbmod.dualsense'
 New-Item -ItemType Directory -Force $package | Out-Null
-Copy-Item target/release/bbmod_dualsense.dll, mod.toml, README.md -Destination $package -Force
+Copy-Item target/release/bbmod_dualsense.dll, mod.toml, README.md, LICENSE -Destination $package -Force
 Copy-Item -LiteralPath licenses -Destination $package -Recurse -Force
 Write-Host "Package: $package"
 if ($ModsDir -and -not $NoDeploy) {
